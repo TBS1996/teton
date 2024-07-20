@@ -8,7 +8,9 @@ use axum::{
     routing::get,
     Router,
 };
-use common::{Request, Response};
+use common::AgentRequest;
+use common::ServerResponse;
+use common::{AgentMessage, ServerMessage};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use hyper::Server;
@@ -22,18 +24,17 @@ use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, trace, warn};
 
-use common::{AgentContent, ServerContent};
+use common::{AgentResponse, ServerRequest};
 
 type AgentID = String;
 
 #[derive(Debug, Serialize, Deserialize)]
 enum StateMessage {
-    GetQty { id: String },
+    GetQty,
 }
 
 struct Inner {
     agents: HashMap<String, UnboundedSender<FooBar>>,
-    _tx: UnboundedSender<StateMessage>,
 }
 
 #[derive(Clone)]
@@ -41,19 +42,18 @@ struct State(Arc<Mutex<Inner>>);
 
 impl State {
     fn new() -> Self {
-        let (tx, _) = mpsc::unbounded_channel();
-
         let inner = Inner {
-            _tx: tx,
             agents: HashMap::default(),
         };
 
-        let state = Self(Arc::new(Mutex::new(inner)));
-
-        state
+        Self(Arc::new(Mutex::new(inner)))
     }
 
-    async fn send_message(&self, id: String, content: ServerContent) -> AgentContent {
+    async fn qty(&self) -> usize {
+        self.0.lock().await.agents.len()
+    }
+
+    async fn send_message(&self, id: String, content: ServerRequest) -> AgentResponse {
         let (os, msg) = FooBar::new(content);
 
         self.0
@@ -70,7 +70,7 @@ impl State {
 
     async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<FooBar>) {
         if let Some(prev) = self.0.lock().await.agents.insert(id, tx) {
-            let (_, msg) = FooBar::new(ServerContent::Close(
+            let (_, msg) = FooBar::new(ServerRequest::Close(
                 "agent with same ID connected to server".to_string(),
             ));
 
@@ -101,7 +101,7 @@ async fn status_handler(
     Extension(state): Extension<State>,
 ) -> impl IntoResponse {
     info!("{}: receive get status request", &agent_id);
-    let content = ServerContent::GetStatus;
+    let content = ServerRequest::GetStatus;
 
     let res = state.send_message(agent_id, content).await;
 
@@ -119,12 +119,12 @@ async fn ws_handler(
 
 #[derive(Debug)]
 struct FooBar {
-    msg: ServerContent,
-    os: oneshot::Sender<AgentContent>,
+    msg: ServerRequest,
+    os: oneshot::Sender<AgentResponse>,
 }
 
 impl FooBar {
-    fn new(msg: ServerContent) -> (oneshot::Receiver<AgentContent>, Self) {
+    fn new(msg: ServerRequest) -> (oneshot::Receiver<AgentResponse>, Self) {
         let (tx, rx) = oneshot::channel();
         (rx, Self { msg, os: tx })
     }
@@ -141,7 +141,7 @@ async fn handle_socket(socket: WebSocket, state: State, id: String) {
     state.insert_agent(id.clone(), server_tx).await;
 
     let (mut socket_tx, mut socket_rx) = socket.split();
-    let mut oneshots: HashMap<String, oneshot::Sender<AgentContent>> = Default::default();
+    let mut oneshots: HashMap<String, oneshot::Sender<AgentResponse>> = Default::default();
 
     info!("starting select loop");
     loop {
@@ -149,10 +149,22 @@ async fn handle_socket(socket: WebSocket, state: State, id: String) {
             // Messages received from the agent
             res = socket_rx.next() => {
                 if let Some(Ok(msg)) = res {
-                    if let Some(msg) = Response::from_message(msg) {
-                        let os = oneshots.remove(&msg.id).unwrap();
-                        os.send(msg.message).unwrap();
-                    }
+                    match AgentMessage::from_message(msg) {
+                        AgentMessage::Response{id, message} => {
+                            let os = oneshots.remove(&id).unwrap();
+                            os.send(message).unwrap();
+                        },
+                        AgentMessage::Request{id, message} => {
+                            match message {
+                                AgentRequest::GetQty => {
+                                    let qty = state.qty().await;
+                                    let msg = ServerMessage::Response { id, message: ServerResponse::Qty(qty) };
+                                    socket_tx.send(msg.into_message()).await.unwrap();
+                                },
+                            }
+
+                        },
+                    };
                 }
             },
 
@@ -165,12 +177,8 @@ async fn handle_socket(socket: WebSocket, state: State, id: String) {
 
                 let id = uuid::Uuid::new_v4().simple().to_string();
                 oneshots.insert(id.clone(), msg.os);
-
-                let msg = Request {
-                    message: msg.msg,
-                    id,
-                };
-                socket_tx.send(msg.into_message()).await.unwrap();
+                let res = ServerMessage::Request {id, message: msg.msg};
+                socket_tx.send(res.into_message()).await.unwrap();
             },
         }
     }

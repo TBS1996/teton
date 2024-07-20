@@ -21,5 +21,5 @@ uuid = { version = "1.10.0", features = ["v4"] }
 
 
 [features]
-default = ["server"]
+#default = ["server"]
 server = ["axum"]

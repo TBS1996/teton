@@ -8,73 +8,82 @@ pub enum PatientStatus {
     Lying,
 }
 
+// A message from the agent
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum AgentMessage {
+    Request { id: String, message: AgentRequest },
+    Response { id: String, message: AgentResponse },
+}
+
 #[cfg(feature = "server")]
 use axum::extract::ws::Message as AxumMessage;
 
 #[cfg(not(feature = "server"))]
 use tokio_tungstenite::tungstenite::protocol::Message as TungsteniteMessage;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Response {
-    pub message: AgentContent,
-    pub id: String,
-}
-
 /// Message from an agent to the server.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum AgentContent {
+pub enum AgentResponse {
     Status(PatientStatus),
     AgentQty,
 }
 
 #[cfg(feature = "server")]
-impl Response {
+impl AgentMessage {
     pub fn into_message(self) -> AxumMessage {
         let mut writer: Vec<u8> = vec![];
         serde_json::to_writer(&mut writer, &self).unwrap();
         AxumMessage::Binary(writer)
     }
 
-    pub fn from_message(message: AxumMessage) -> Option<Self> {
-        let AxumMessage::Binary(b) = message else {
-            return None;
+    pub fn from_message(message: AxumMessage) -> Self {
+        if let AxumMessage::Binary(b) = message {
+            return serde_json::from_slice(&b).unwrap();
         };
-        serde_json::from_slice(&b).ok()
+
+        panic!();
     }
 }
 
 #[cfg(not(feature = "server"))]
-impl Response {
+impl AgentMessage {
     pub fn into_message(self) -> TungsteniteMessage {
         let mut writer: Vec<u8> = vec![];
         serde_json::to_writer(&mut writer, &self).unwrap();
         TungsteniteMessage::Binary(writer)
     }
 
-    pub fn from_message(message: TungsteniteMessage) -> Option<Self> {
+    pub fn from_message(message: TungsteniteMessage) -> Self {
         if let TungsteniteMessage::Binary(b) = message {
-            serde_json::from_slice(&b).ok()
-        } else {
-            None
-        }
+            return serde_json::from_slice(&b).unwrap();
+        };
+
+        panic!()
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Request {
-    pub message: ServerContent,
-    pub id: String,
+// A message from the agent
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ServerMessage {
+    Request { id: String, message: ServerRequest },
+    Response { id: String, message: ServerResponse },
 }
 
 /// Message from the server to an agent.
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ServerContent {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ServerResponse {
+    Qty(usize),
+}
+
+/// Message from the server to an agent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ServerRequest {
     GetStatus,
     Close(String),
 }
 
 #[cfg(feature = "server")]
-impl Request {
+impl ServerMessage {
     pub fn into_message(self) -> AxumMessage {
         let mut writer: Vec<u8> = vec![];
         serde_json::to_writer(&mut writer, &self).unwrap();
@@ -90,18 +99,23 @@ impl Request {
 }
 
 #[cfg(not(feature = "server"))]
-impl Request {
+impl ServerMessage {
     pub fn into_message(self) -> TungsteniteMessage {
         let mut writer: Vec<u8> = vec![];
         serde_json::to_writer(&mut writer, &self).unwrap();
         TungsteniteMessage::Binary(writer)
     }
 
-    pub fn from_message(message: TungsteniteMessage) -> Option<Self> {
+    pub fn from_message(message: TungsteniteMessage) -> Self {
         if let TungsteniteMessage::Binary(b) = message {
-            serde_json::from_slice(&b).ok()
-        } else {
-            None
-        }
+            return serde_json::from_slice(&b).unwrap();
+        };
+
+        panic!();
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum AgentRequest {
+    GetQty,
 }
