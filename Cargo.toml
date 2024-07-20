@@ -1,0 +1,25 @@
+[package]
+name = "teton"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.5", features = ["ws"] , optional=true}
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hyper = { version = "0.14", features = ["full"] }
+
+tokio-tungstenite = "0.15"
+tokio-stream = "0.1.15"
+
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1.10.0", features = ["v4"] }
+
+
+
+[features]
+default = ["server"]
+server = ["axum"]
