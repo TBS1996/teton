@@ -10,7 +10,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::connect_async;
 
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::UnboundedSender;
 
 fn handle_server_content(content: ServerRequest) -> AgentResponse {
     match content {
@@ -32,50 +32,89 @@ async fn sleep(secs: u64) {
     tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
 }
 
+struct FooBar {
+    request: AgentRequest,
+    sender: oneshot::Sender<ServerResponse>,
+}
+
+impl FooBar {
+    fn new(request: AgentRequest, sender: oneshot::Sender<ServerResponse>) -> Self {
+        Self { request, sender }
+    }
+}
+
 // PoC to show that agents can make requests to server.
-fn agent_counter() -> UnboundedReceiver<(AgentRequest, oneshot::Sender<ServerResponse>)> {
-    let (tx, rx) = mpsc::unbounded_channel();
+fn agent_counter(tx: UnboundedSender<FooBar>) {
+    dbg!("starting agent counter thing");
     tokio::spawn(async move {
         loop {
             sleep(5).await;
             let (txx, rxx) = oneshot::channel();
-            let inside = (AgentRequest::GetQty, txx);
+            let inside = FooBar::new(AgentRequest::GetQty, txx);
+            eprintln!("sending qty request");
             tx.send(inside).unwrap();
             let wth = rxx.await.unwrap();
             eprintln!("total agents: {:?}", wth);
         }
     });
-
-    rx
 }
 
-pub async fn run(id: String) {
+fn agent_getstatus(tx: UnboundedSender<FooBar>, id: String) {
+    eprintln!("getting status of: {}", &id);
+
+    tokio::spawn(async move {
+        loop {
+            sleep(5).await;
+            let (txx, rxx) = oneshot::channel();
+            let inside = FooBar::new(AgentRequest::AgentStatus(id.clone()), txx);
+            tx.send(inside).unwrap();
+            if let ServerResponse::Status(status) = rxx.await.unwrap() {
+                match status {
+                    Some(status) => {
+                        println!("{}-status: {:?}", &id, &status);
+                    }
+                    None => {
+                        println!("no agent connected with following id: {}", &id);
+                    }
+                }
+            }
+        }
+    });
+}
+
+pub async fn run(id: String, observe: Vec<String>) {
     dbg!("running agent", &id);
 
     let url = format!("ws://{}/ws?agent_id={}", common::ADDR, id);
     let (ws, _) = connect_async(url).await.expect("Failed to connect");
-    let (mut tx, mut rx) = ws.split();
+    let (mut socket_tx, mut socket_rx) = ws.split();
     let mut oneshots: HashMap<String, oneshot::Sender<ServerResponse>> = Default::default();
 
-    let mut rec = UnboundedReceiverStream::new(agent_counter());
+    let (agent_tx, agent_rx) = mpsc::unbounded_channel();
+    let mut agent_rx = UnboundedReceiverStream::new(agent_rx);
 
+    agent_counter(agent_tx.clone());
+    for id in observe {
+        agent_getstatus(agent_tx.clone(), id);
+    }
+
+    dbg!("start select looop");
     loop {
         tokio::select! {
-            Some(msg) = rec.next() => {
-                let (req, os) = msg;
+            Some(msg) = agent_rx.next() => {
                 let id = uuid::Uuid::new_v4().simple().to_string();
-                oneshots.insert(id.clone(), os);
-                let res = AgentMessage::Request {id, message: req};
-                tx.send(res.into_message()).await.unwrap();
+                oneshots.insert(id.clone(), msg.sender);
+                let res = AgentMessage::Request {id, message: msg.request};
+                socket_tx.send(res.into_message()).await.unwrap();
             },
-            Some(message) = rx.next() => {
+            Some(message) = socket_rx.next() => {
                 match ServerMessage::from_message(message.unwrap()) {
                     ServerMessage::Request{id, message} => {
                         let response = AgentMessage::Response {
                             message: handle_server_content(message),
                             id,
                         };
-                        tx.send(response.into_message()).await.unwrap();
+                        socket_tx.send(response.into_message()).await.unwrap();
 
                     },
                     ServerMessage::Response{ id, message } => {

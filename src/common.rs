@@ -73,6 +73,7 @@ pub enum ServerMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerResponse {
     Qty(usize),
+    Status(Option<PatientStatus>),
 }
 
 /// Message from the server to an agent.
@@ -118,4 +119,5 @@ impl ServerMessage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum AgentRequest {
     GetQty,
+    AgentStatus(String),
 }

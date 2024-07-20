@@ -9,8 +9,10 @@ use axum::{
     Router,
 };
 use common::AgentRequest;
+use common::PatientStatus;
 use common::ServerResponse;
 use common::{AgentMessage, ServerMessage};
+use common::{AgentResponse, ServerRequest};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use hyper::Server;
@@ -23,8 +25,6 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, trace, warn};
-
-use common::{AgentResponse, ServerRequest};
 
 type AgentID = String;
 
@@ -53,19 +53,19 @@ impl State {
         self.0.lock().await.agents.len()
     }
 
-    async fn send_message(&self, id: String, content: ServerRequest) -> AgentResponse {
+    async fn get_status(&self, id: String) -> Option<PatientStatus> {
+        let res = self.send_message(id, ServerRequest::GetStatus).await?;
+        if let AgentResponse::Status(status) = res {
+            return Some(status);
+        }
+
+        panic!();
+    }
+
+    async fn send_message(&self, id: String, content: ServerRequest) -> Option<AgentResponse> {
         let (os, msg) = FooBar::new(content);
-
-        self.0
-            .lock()
-            .await
-            .agents
-            .get(&id)
-            .unwrap()
-            .send(msg)
-            .unwrap();
-
-        os.await.unwrap()
+        self.0.lock().await.agents.get(&id)?.send(msg).ok()?;
+        os.await.ok()
     }
 
     async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<FooBar>) {
@@ -156,6 +156,12 @@ async fn handle_socket(socket: WebSocket, state: State, id: String) {
                         },
                         AgentMessage::Request{id, message} => {
                             match message {
+                                AgentRequest::AgentStatus(agent_id) => {
+                                    let status = state.get_status(agent_id).await;
+                                    let msg = ServerMessage::Response { id, message: ServerResponse::Status(status) };
+                                    socket_tx.send(msg.into_message()).await.unwrap();
+
+                                }
                                 AgentRequest::GetQty => {
                                     let qty = state.qty().await;
                                     let msg = ServerMessage::Response { id, message: ServerResponse::Qty(qty) };
@@ -170,7 +176,6 @@ async fn handle_socket(socket: WebSocket, state: State, id: String) {
 
             // Messages received from [`State`]
             res = server_rx.next() => {
-                info!("received: {:?}", &res);
                 let Some(msg) = res else {
                     return;
                 };
