@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
 
 pub const ADDR: &str = "0.0.0.0:3000";
 
@@ -12,24 +11,13 @@ pub enum PatientStatus {
 pub type ServerResponse = Vec<u8>;
 pub type AgentResponse = Vec<u8>;
 pub type AgentID = String;
-
-pub struct BarFoo<T: Sized> {
-    pub request: T,
-    pub sender: oneshot::Sender<ServerResponse>,
-}
-
-impl<T> BarFoo<T> {
-    pub fn new(request: T) -> (oneshot::Receiver<Vec<u8>>, Self) {
-        let (sender, rx) = oneshot::channel();
-        (rx, Self { request, sender })
-    }
-}
+pub type RequestID = String;
 
 // A message from an agent
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum AgentMessage {
     Request { id: String, message: AgentRequest },
-    Response { id: String, data: Vec<u8> },
+    Response { id: String, data: AgentResponse },
 }
 
 #[cfg(feature = "server")]

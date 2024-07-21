@@ -11,8 +11,8 @@ use axum::{
 use common::AgentID;
 use common::AgentRequest;
 use common::AgentResponse;
-use common::BarFoo;
 use common::PatientStatus;
+use common::RequestID;
 use common::ServerRequest;
 use common::{AgentMessage, ServerMessage};
 use futures_util::SinkExt;
@@ -28,20 +28,18 @@ use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{self, info};
 
+#[derive(Default)]
 struct Inner {
-    agents: HashMap<String, UnboundedSender<BarFoo<ServerRequest>>>,
+    agents: HashMap<AgentID, UnboundedSender<ServerMessage>>,
+    oneshots: HashMap<RequestID, oneshot::Sender<AgentResponse>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct State(Arc<Mutex<Inner>>);
 
 impl State {
     fn new() -> Self {
-        let inner = Inner {
-            agents: HashMap::default(),
-        };
-
-        Self(Arc::new(Mutex::new(inner)))
+        Self::default()
     }
 
     async fn qty(&self) -> usize {
@@ -52,28 +50,63 @@ impl State {
         self.send_message(id, ServerRequest::GetStatus).await
     }
 
+    async fn handle_request(&self, id: RequestID, request: AgentRequest) -> ServerMessage {
+        match request {
+            AgentRequest::AgentStatus(agent_id) => {
+                let status = self.get_status(agent_id).await;
+                ServerMessage::new_response(id, status)
+            }
+            AgentRequest::GetQty => {
+                let qty = self.qty().await;
+                ServerMessage::new_response(id, qty)
+            }
+        }
+    }
+
+    async fn handle_response(&self, id: RequestID, response: AgentResponse) {
+        match self.0.lock().await.oneshots.remove(&id) {
+            Some(os) => {
+                if os.send(response).is_err() {
+                    tracing::error!("failed to send response to oneshot. id: {}", &id);
+                }
+            }
+            None => {
+                tracing::error!("id not found among oneshots: {}", &id);
+            }
+        };
+    }
+
     async fn send_message<ResponseType: for<'de> Deserialize<'de>>(
         &self,
         id: AgentID,
         content: ServerRequest,
     ) -> Option<ResponseType> {
-        let (os, msg) = BarFoo::<ServerRequest>::new(content);
+        let (sender, os) = oneshot::channel();
 
-        //let (os, msg) = BarFoo<ServerRequest>::new(content);
+        let request_id = uuid::Uuid::new_v4().simple().to_string();
 
-        self.0.lock().await.agents.get(&id)?.send(msg).ok()?;
+        self.0
+            .lock()
+            .await
+            .oneshots
+            .insert(request_id.clone(), sender);
+
+        let req = ServerMessage::Request {
+            id: request_id,
+            message: content,
+        };
+
+        self.0.lock().await.agents.get(&id)?.send(req).ok()?;
+
         let res = os.await.ok()?;
 
         serde_json::from_slice(&res).ok()
     }
 
-    async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<BarFoo<ServerRequest>>) {
+    async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<ServerMessage>) {
         if let Some(prev) = self.0.lock().await.agents.insert(id, tx) {
-            let (_, msg) = BarFoo::<ServerRequest>::new(ServerRequest::Close(
-                "agent with same ID connected to server".to_string(),
-            ));
-
-            prev.send(msg).ok();
+            //let msg = ServerRequest::Close("agent with same ID connected to server".to_string());
+            //prev.send(msg).ok();
         }
     }
 }
@@ -119,57 +152,31 @@ async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: State, id: AgentID) {
     info!("connecting agent: {}", &id);
 
-    let (server_tx, mut server_rx) = {
-        let (server_tx, server_rx) = mpsc::unbounded_channel::<BarFoo<ServerRequest>>();
-        (server_tx, UnboundedReceiverStream::new(server_rx))
+    let mut server_rx = {
+        let (server_tx, server_rx) = mpsc::unbounded_channel::<ServerMessage>();
+        state.insert_agent(id.clone(), server_tx).await;
+        UnboundedReceiverStream::new(server_rx)
     };
 
-    state.insert_agent(id.clone(), server_tx).await;
-
     let (mut socket_tx, mut socket_rx) = socket.split();
-    let mut oneshots: HashMap<AgentID, oneshot::Sender<AgentResponse>> = Default::default();
 
     info!("starting select loop");
     loop {
         tokio::select! {
             // Messages received from the agent
-            res = socket_rx.next() => {
-                if let Some(Ok(msg)) = res {
-                    match AgentMessage::from_message(msg) {
-                        AgentMessage::Response{id, data} => {
-                            let os = oneshots.remove(&id).unwrap();
-                            os.send(data).unwrap();
-                        },
-                        AgentMessage::Request{id, message} => {
-                            match message {
-                                AgentRequest::AgentStatus(agent_id) => {
-                                    let status = state.get_status(agent_id).await;
-                                    let msg = ServerMessage::new_response(id, status);
-                                    socket_tx.send(msg.into_message()).await.unwrap();
-
-                                }
-                                AgentRequest::GetQty => {
-                                    let qty = state.qty().await;
-                                    let msg = ServerMessage::new_response(id, qty);
-                                    socket_tx.send(msg.into_message()).await.unwrap();
-                                },
-                            }
-
-                        },
-                    };
-                }
+            Some(Ok(msg)) = socket_rx.next() => {
+                match AgentMessage::from_message(msg) {
+                    AgentMessage::Response{id, data} => state.handle_response(id, data).await,
+                    AgentMessage::Request{id, message} => {
+                        let msg = state.handle_request(id, message).await;
+                        socket_tx.send(msg.into_message()).await.unwrap();
+                    },
+                };
             },
 
             // Messages received from [`State`]
-            res = server_rx.next() => {
-                let Some(msg) = res else {
-                    return;
-                };
-
-                let id = uuid::Uuid::new_v4().simple().to_string();
-                oneshots.insert(id.clone(), msg.sender);
-                let res = ServerMessage::Request {id, message: msg.request};
-                socket_tx.send(res.into_message()).await.unwrap();
+            Some(req) = server_rx.next() => {
+                socket_tx.send(req.into_message()).await.unwrap();
             },
         }
     }

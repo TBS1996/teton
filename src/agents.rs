@@ -2,17 +2,17 @@ use crate::common;
 use common::AgentID;
 use common::AgentMessage;
 use common::AgentRequest;
-use common::BarFoo;
+use common::RequestEnvelope;
+use common::RequestID;
 use common::ServerMessage;
 use common::ServerResponse;
 use common::{PatientStatus, ServerRequest};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::collections::HashMap;
-use tokio::sync::oneshot;
-type RequestID = String;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::connect_async;
 
@@ -34,17 +34,6 @@ async fn sleep(secs: u64) {
     tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
 }
 
-struct xBarFoo<AgentRequest> {
-    request: AgentRequest,
-    sender: oneshot::Sender<ServerResponse>,
-}
-
-impl xBarFoo<AgentRequest> {
-    fn new(request: AgentRequest, sender: oneshot::Sender<ServerResponse>) -> Self {
-        Self { request, sender }
-    }
-}
-
 // PoC to show that agents can make requests to server.
 fn agent_counter(sender: LolSender) {
     dbg!("starting agent counter thing");
@@ -59,11 +48,11 @@ fn agent_counter(sender: LolSender) {
 
 #[derive(Clone)]
 struct LolSender {
-    tx: UnboundedSender<BarFoo<AgentRequest>>,
+    tx: UnboundedSender<RequestEnvelope<AgentRequest>>,
 }
 
 impl LolSender {
-    fn new() -> (Self, UnboundedReceiverStream<BarFoo<AgentRequest>>) {
+    fn new() -> (Self, UnboundedReceiverStream<RequestEnvelope<AgentRequest>>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let rx = UnboundedReceiverStream::new(rx);
         let s = Self { tx };
@@ -72,9 +61,7 @@ impl LolSender {
     }
 
     async fn send<T: for<'de> Deserialize<'de>>(&self, req: AgentRequest) -> Result<T, String> {
-        let (tx, rx) = oneshot::channel();
-
-        let inside = BarFoo::<AgentRequest>::new(req, tx);
+        let (rx, inside) = RequestEnvelope::<AgentRequest>::new(req);
 
         self.tx.send(inside).map_err(|e| e.to_string())?;
 
@@ -126,6 +113,7 @@ pub async fn run(id: AgentID, observe: Vec<AgentID>) {
             Some(msg) = agent_rx.next() => {
                 let id = uuid::Uuid::new_v4().simple().to_string();
                 oneshots.insert(id.clone(), msg.sender);
+                dbg!("sending request,", &id, &msg.request);
                 let res = AgentMessage::Request {id, message: msg.request};
                 socket_tx.send(res.into_message()).await.unwrap();
             },
