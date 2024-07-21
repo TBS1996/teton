@@ -20,7 +20,7 @@ use tokio_tungstenite::connect_async;
 fn handle_server_request(id: RequestID, content: ServerRequest) -> AgentMessage {
     match content {
         ServerRequest::Close(msg) => {
-            eprintln!("connection closed: {}", msg);
+            tracing::warn!("connection closed: {}", msg);
             std::process::exit(0);
         }
 
@@ -44,6 +44,8 @@ pub struct Agent {
 
 impl Agent {
     pub async fn start(id: AgentID, observer: Vec<AgentID>) {
+        tracing::info!("starting agent: {}", &id);
+
         let (tx, rx) = mpsc::unbounded_channel();
         let rx = UnboundedReceiverStream::new(rx);
         let s = Self {
@@ -90,7 +92,7 @@ impl Agent {
     }
 
     fn agent_getstatus(&self, id: AgentID) {
-        eprintln!("getting status of: {}", &id);
+        tracing::info!("getting status of: {}", &id);
 
         let sender = self.clone();
         tokio::spawn(async move {
@@ -102,8 +104,8 @@ impl Agent {
                     .unwrap();
 
                 match status {
-                    Some(status) => println!("{}-status: {:?}", &id, &status),
-                    None => println!("no agent connected with following id: {}", &id),
+                    Some(status) => tracing::info!("{}-status: {:?}", &id, &status),
+                    None => tracing::error!("no agent connected with following id: {}", &id),
                 }
             }
         });
@@ -111,13 +113,12 @@ impl Agent {
 
     // PoC to show that agents can make requests to server.
     fn agent_counter(&self) {
-        dbg!("starting agent counter thing");
         let sender = self.clone();
         tokio::spawn(async move {
             loop {
                 sleep(5).await;
                 let res: usize = sender.send(AgentRequest::GetQty).await.unwrap();
-                eprintln!("total agents: {:?}", res);
+                tracing::info!("total agents: {}", res);
             }
         });
     }

@@ -27,12 +27,15 @@ struct Args {
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
     server::run_server().await;
 }
 
 #[cfg(not(feature = "server"))]
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     let args = Args::parse();
 
     if args.agents.is_empty() {

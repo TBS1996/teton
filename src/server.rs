@@ -110,7 +110,6 @@ impl State {
 }
 
 pub async fn run_server() {
-    tracing_subscriber::fmt::init();
     info!("running server");
 
     let state = State::new();
