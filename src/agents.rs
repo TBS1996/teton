@@ -148,7 +148,7 @@ impl Agent {
                         },
 
                         ServerMessage::Terminate(reason) => {
-                            tracing::warn!("shuttdown down agent {}. {}", &self.id, reason);
+                            tracing::warn!("{}: shutting down: {}", &self.id, reason);
                             return;
                         }
                     }

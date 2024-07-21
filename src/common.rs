@@ -83,6 +83,10 @@ impl ServerMessage {
         serde_json::to_writer(&mut writer, &self).unwrap();
         AxumMessage::Binary(writer)
     }
+
+    pub fn is_terminate(&self) -> bool {
+        matches!(self, &Self::Terminate(_))
+    }
 }
 
 #[cfg(not(feature = "server"))]

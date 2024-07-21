@@ -82,7 +82,7 @@ impl State {
         id: AgentID,
         content: ServerRequest,
     ) -> Option<ResponseType> {
-        let (sender, os) = oneshot::channel();
+        let (sender, rx) = oneshot::channel();
 
         let request_id = uuid::Uuid::new_v4().simple().to_string();
 
@@ -96,7 +96,7 @@ impl State {
 
         self.0.lock().await.agents.get(&id)?.send(req).ok()?;
 
-        let res = os.await.ok()?;
+        let res = rx.await.ok()?;
 
         serde_json::from_slice(&res).ok()
     }
@@ -176,8 +176,13 @@ async fn handle_socket(socket: WebSocket, state: State, agent_id: AgentID) {
 
             // Messages received from [`State`]
             Some(req) = server_rx.next() => {
+                let should_shutdown = req.is_terminate();
                 if let Err(e) = socket_tx.send(req.into_message()).await  {
                     tracing::error!("failed to send message to agent: {}. message: {:?}, err: {}", &agent_id, &req, e);
+                }
+
+                if should_shutdown {
+                    return;
                 }
             },
         }
