@@ -135,13 +135,17 @@ impl Agent {
         loop {
             tokio::select! {
                 Some(msg) = rx.next() => {
-                    socket_tx.send(msg.into_message()).await.unwrap();
+                    if let Err(e) = socket_tx.send(msg.into_message()).await {
+                        tracing::error!("failed to send message to server: {}", e);
+                    }
                 },
                 Some(Ok(message)) = socket_rx.next() => {
                     match ServerMessage::from_message(message) {
                         ServerMessage::Request{id, message} => {
                             let response = handle_server_request(id, message);
-                            socket_tx.send(response.into_message()).await.unwrap();
+                            if let Err(e) = socket_tx.send(response.into_message()).await {
+                                tracing::error!("failed to send message to server: {}", e);
+                            }
 
                         },
                         ServerMessage::Response{ id, data } => {
