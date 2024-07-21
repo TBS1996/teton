@@ -1,18 +1,19 @@
 use crate::common;
 use common::AgentMessage;
+use common::AgentRequest;
 use common::ServerMessage;
 use common::ServerResponse;
 use common::{AgentResponse, PatientStatus, ServerRequest};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
+type RequestID = String;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::connect_async;
 
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedSender;
-
-fn handle_server_content(content: ServerRequest) -> AgentResponse {
+fn handle_server_request(content: ServerRequest) -> AgentResponse {
     match content {
         ServerRequest::Close(msg) => {
             eprintln!("connection closed: {}", msg);
@@ -25,8 +26,6 @@ fn handle_server_content(content: ServerRequest) -> AgentResponse {
         }
     }
 }
-
-use common::AgentRequest;
 
 async fn sleep(secs: u64) {
     tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
@@ -44,38 +43,51 @@ impl FooBar {
 }
 
 // PoC to show that agents can make requests to server.
-fn agent_counter(tx: UnboundedSender<FooBar>) {
+fn agent_counter(sender: LolSender) {
     dbg!("starting agent counter thing");
     tokio::spawn(async move {
         loop {
             sleep(5).await;
-            let (txx, rxx) = oneshot::channel();
-            let inside = FooBar::new(AgentRequest::GetQty, txx);
-            eprintln!("sending qty request");
-            tx.send(inside).unwrap();
-            let wth = rxx.await.unwrap();
-            eprintln!("total agents: {:?}", wth);
+            let res = sender.send(AgentRequest::GetQty).await;
+            eprintln!("total agents: {:?}", res);
         }
     });
 }
 
-fn agent_getstatus(tx: UnboundedSender<FooBar>, id: String) {
+#[derive(Clone)]
+struct LolSender {
+    tx: UnboundedSender<FooBar>,
+}
+
+impl LolSender {
+    fn new() -> (Self, UnboundedReceiverStream<FooBar>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let rx = UnboundedReceiverStream::new(rx);
+        let s = Self { tx };
+
+        (s, rx)
+    }
+
+    async fn send(&self, req: AgentRequest) -> ServerResponse {
+        let (tx, rx) = oneshot::channel();
+        let inside = FooBar::new(req, tx);
+        self.tx.send(inside).unwrap();
+        rx.await.unwrap()
+    }
+}
+
+fn agent_getstatus(sender: LolSender, id: String) {
     eprintln!("getting status of: {}", &id);
 
     tokio::spawn(async move {
         loop {
             sleep(5).await;
-            let (txx, rxx) = oneshot::channel();
-            let inside = FooBar::new(AgentRequest::AgentStatus(id.clone()), txx);
-            tx.send(inside).unwrap();
-            if let ServerResponse::Status(status) = rxx.await.unwrap() {
+            let res = sender.send(AgentRequest::AgentStatus(id.clone())).await;
+
+            if let ServerResponse::Status(status) = res {
                 match status {
-                    Some(status) => {
-                        println!("{}-status: {:?}", &id, &status);
-                    }
-                    None => {
-                        println!("no agent connected with following id: {}", &id);
-                    }
+                    Some(status) => println!("{}-status: {:?}", &id, &status),
+                    None => println!("no agent connected with following id: {}", &id),
                 }
             }
         }
@@ -85,17 +97,18 @@ fn agent_getstatus(tx: UnboundedSender<FooBar>, id: String) {
 pub async fn run(id: String, observe: Vec<String>) {
     dbg!("running agent", &id);
 
-    let url = format!("ws://{}/ws?agent_id={}", common::ADDR, id);
-    let (ws, _) = connect_async(url).await.expect("Failed to connect");
-    let (mut socket_tx, mut socket_rx) = ws.split();
-    let mut oneshots: HashMap<String, oneshot::Sender<ServerResponse>> = Default::default();
+    let mut oneshots: HashMap<RequestID, oneshot::Sender<ServerResponse>> = Default::default();
+    let (sender, mut agent_rx) = LolSender::new();
 
-    let (agent_tx, agent_rx) = mpsc::unbounded_channel();
-    let mut agent_rx = UnboundedReceiverStream::new(agent_rx);
+    let (mut socket_tx, mut socket_rx) = {
+        let url = format!("ws://{}/ws?agent_id={}", common::ADDR, id);
+        let (ws, _) = connect_async(url).await.expect("Failed to connect");
+        ws.split()
+    };
 
-    agent_counter(agent_tx.clone());
+    agent_counter(sender.clone());
     for id in observe {
-        agent_getstatus(agent_tx.clone(), id);
+        agent_getstatus(sender.clone(), id);
     }
 
     dbg!("start select looop");
@@ -111,7 +124,7 @@ pub async fn run(id: String, observe: Vec<String>) {
                 match ServerMessage::from_message(message.unwrap()) {
                     ServerMessage::Request{id, message} => {
                         let response = AgentMessage::Response {
-                            message: handle_server_content(message),
+                            message: handle_server_request(message),
                             id,
                         };
                         socket_tx.send(response.into_message()).await.unwrap();

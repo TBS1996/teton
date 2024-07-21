@@ -2,6 +2,15 @@ use serde::{Deserialize, Serialize};
 
 pub const ADDR: &str = "0.0.0.0:3000";
 
+impl ResponseType for AgentRequest {
+    fn response_type(&self) -> &'static str {
+        match self {
+            Self::AgentStatus(_) => "PatientStatus",
+            Self::GetQty => "usize",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum PatientStatus {
     Sitting,
