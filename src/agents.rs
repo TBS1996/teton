@@ -19,11 +19,6 @@ use tokio_tungstenite::connect_async;
 
 fn handle_server_request(id: RequestID, content: ServerRequest) -> AgentMessage {
     match content {
-        ServerRequest::Close(msg) => {
-            tracing::warn!("connection closed: {}", msg);
-            std::process::exit(0);
-        }
-
         ServerRequest::GetStatus => {
             let status = get_status();
             AgentMessage::new_response(id, status)
@@ -151,6 +146,11 @@ impl Agent {
                         ServerMessage::Response{ id, data } => {
                             self.handle_response(id, data).await;
                         },
+
+                        ServerMessage::Terminate(reason) => {
+                            tracing::warn!("shuttdown down agent {}. {}", &self.id, reason);
+                            return;
+                        }
                     }
                 },
             }

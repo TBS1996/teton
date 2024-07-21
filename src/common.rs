@@ -57,13 +57,13 @@ impl AgentMessage {
 pub enum ServerMessage {
     Request { id: String, message: ServerRequest },
     Response { id: String, data: ServerResponse },
+    Terminate(String),
 }
 
 /// Message from the server to an agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerRequest {
     GetStatus,
-    Close(String),
 }
 
 #[cfg(feature = "server")]

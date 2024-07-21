@@ -103,8 +103,9 @@ impl State {
 
     async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<ServerMessage>) {
         if let Some(prev) = self.0.lock().await.agents.insert(id, tx) {
-            //let msg = ServerRequest::Close("agent with same ID connected to server".to_string());
-            //prev.send(msg).ok();
+            let msg =
+                ServerMessage::Terminate("agent with same ID connected to server".to_string());
+            prev.send(msg).ok();
         }
     }
 }
