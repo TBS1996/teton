@@ -8,14 +8,16 @@ use axum::{
     routing::get,
     Router,
 };
+use common::AgentID;
 use common::AgentRequest;
+use common::AgentResponse;
 use common::PatientStatus;
 use common::ServerRequest;
 use common::{AgentMessage, ServerMessage};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use hyper::Server;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -23,10 +25,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, error, info, trace, warn};
-
-type AgentID = String;
-type AgentResponse = Vec<u8>;
+use tracing::{self, info};
 
 struct Inner {
     agents: HashMap<String, UnboundedSender<FooBar>>,
@@ -48,15 +47,20 @@ impl State {
         self.0.lock().await.agents.len()
     }
 
-    async fn get_status(&self, id: String) -> Option<PatientStatus> {
-        let res = self.send_message(id, ServerRequest::GetStatus).await?;
-        serde_json::from_slice(&res).ok()
+    async fn get_status(&self, id: AgentID) -> Option<PatientStatus> {
+        self.send_message(id, ServerRequest::GetStatus).await
     }
 
-    async fn send_message(&self, id: String, content: ServerRequest) -> Option<AgentResponse> {
+    async fn send_message<ResponseType: for<'de> Deserialize<'de>>(
+        &self,
+        id: AgentID,
+        content: ServerRequest,
+    ) -> Option<ResponseType> {
         let (os, msg) = FooBar::new(content);
         self.0.lock().await.agents.get(&id)?.send(msg).ok()?;
-        os.await.ok()
+        let res = os.await.ok()?;
+
+        serde_json::from_slice(&res).ok()
     }
 
     async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<FooBar>) {
@@ -94,7 +98,7 @@ async fn status_handler(
     info!("{}: receive get status request", &agent_id);
     let content = ServerRequest::GetStatus;
 
-    let res = state.send_message(agent_id, content).await;
+    let res: Option<PatientStatus> = state.send_message(agent_id, content).await;
 
     serde_json::to_string(&res).unwrap()
 }
@@ -121,7 +125,7 @@ impl FooBar {
     }
 }
 
-async fn handle_socket(socket: WebSocket, state: State, id: String) {
+async fn handle_socket(socket: WebSocket, state: State, id: AgentID) {
     info!("connecting agent: {}", &id);
 
     let (server_tx, mut server_rx) = {
@@ -132,7 +136,7 @@ async fn handle_socket(socket: WebSocket, state: State, id: String) {
     state.insert_agent(id.clone(), server_tx).await;
 
     let (mut socket_tx, mut socket_rx) = socket.split();
-    let mut oneshots: HashMap<String, oneshot::Sender<AgentResponse>> = Default::default();
+    let mut oneshots: HashMap<AgentID, oneshot::Sender<AgentResponse>> = Default::default();
 
     info!("starting select loop");
     loop {

@@ -23,5 +23,5 @@ clap = { version = "4.0", features = ["derive"] }
 
 
 [features]
-default = ["server"]
+#default = ["server"]
 server = ["axum"]

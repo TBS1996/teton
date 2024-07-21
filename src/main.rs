@@ -1,4 +1,6 @@
 use clap::Parser;
+
+#[cfg(not(feature = "server"))]
 use futures::future::join_all;
 
 mod common;
@@ -45,4 +47,3 @@ async fn main() {
 
     println!("All agents terminated");
 }
-

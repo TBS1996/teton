@@ -9,6 +9,8 @@ pub enum PatientStatus {
 }
 
 pub type ServerResponse = Vec<u8>;
+pub type AgentResponse = Vec<u8>;
+pub type AgentID = String;
 
 // A message from the agent
 #[derive(Debug, Serialize, Deserialize, Clone)]

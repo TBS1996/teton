@@ -1,10 +1,12 @@
 use crate::common;
+use common::AgentID;
 use common::AgentMessage;
 use common::AgentRequest;
 use common::ServerMessage;
 use common::ServerResponse;
 use common::{PatientStatus, ServerRequest};
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::sync::oneshot;
 type RequestID = String;
@@ -13,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::connect_async;
 
-fn handle_server_request(id: String, content: ServerRequest) -> AgentMessage {
+fn handle_server_request(id: AgentID, content: ServerRequest) -> AgentMessage {
     match content {
         ServerRequest::Close(msg) => {
             eprintln!("connection closed: {}", msg);
@@ -48,7 +50,7 @@ fn agent_counter(sender: LolSender) {
     tokio::spawn(async move {
         loop {
             sleep(5).await;
-            let res = sender.send(AgentRequest::GetQty).await;
+            let res: usize = sender.send(AgentRequest::GetQty).await.unwrap();
             eprintln!("total agents: {:?}", res);
         }
     });
@@ -68,22 +70,25 @@ impl LolSender {
         (s, rx)
     }
 
-    async fn send(&self, req: AgentRequest) -> ServerResponse {
+    async fn send<T: for<'de> Deserialize<'de>>(&self, req: AgentRequest) -> Result<T, String> {
         let (tx, rx) = oneshot::channel();
         let inside = FooBar::new(req, tx);
-        self.tx.send(inside).unwrap();
-        rx.await.unwrap()
+        self.tx.send(inside).map_err(|e| e.to_string())?;
+        let res = rx.await.map_err(|e| e.to_string())?;
+        serde_json::from_slice(&res).map_err(|e| e.to_string())
     }
 }
 
-fn agent_getstatus(sender: LolSender, id: String) {
+fn agent_getstatus(sender: LolSender, id: AgentID) {
     eprintln!("getting status of: {}", &id);
 
     tokio::spawn(async move {
         loop {
             sleep(5).await;
-            let res = sender.send(AgentRequest::AgentStatus(id.clone())).await;
-            let status: Option<PatientStatus> = serde_json::from_slice(&res).unwrap();
+            let status: Option<PatientStatus> = sender
+                .send(AgentRequest::AgentStatus(id.clone()))
+                .await
+                .unwrap();
 
             match status {
                 Some(status) => println!("{}-status: {:?}", &id, &status),
@@ -93,7 +98,7 @@ fn agent_getstatus(sender: LolSender, id: String) {
     });
 }
 
-pub async fn run(id: String, observe: Vec<String>) {
+pub async fn run(id: AgentID, observe: Vec<AgentID>) {
     dbg!("running agent", &id);
 
     let mut oneshots: HashMap<RequestID, oneshot::Sender<ServerResponse>> = Default::default();
