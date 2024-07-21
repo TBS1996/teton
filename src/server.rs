@@ -11,6 +11,7 @@ use axum::{
 use common::AgentID;
 use common::AgentRequest;
 use common::AgentResponse;
+use common::BarFoo;
 use common::PatientStatus;
 use common::ServerRequest;
 use common::{AgentMessage, ServerMessage};
@@ -28,7 +29,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{self, info};
 
 struct Inner {
-    agents: HashMap<String, UnboundedSender<FooBar>>,
+    agents: HashMap<String, UnboundedSender<BarFoo<ServerRequest>>>,
 }
 
 #[derive(Clone)]
@@ -56,16 +57,19 @@ impl State {
         id: AgentID,
         content: ServerRequest,
     ) -> Option<ResponseType> {
-        let (os, msg) = FooBar::new(content);
+        let (os, msg) = BarFoo::<ServerRequest>::new(content);
+
+        //let (os, msg) = BarFoo<ServerRequest>::new(content);
+
         self.0.lock().await.agents.get(&id)?.send(msg).ok()?;
         let res = os.await.ok()?;
 
         serde_json::from_slice(&res).ok()
     }
 
-    async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<FooBar>) {
+    async fn insert_agent(&self, id: AgentID, tx: UnboundedSender<BarFoo<ServerRequest>>) {
         if let Some(prev) = self.0.lock().await.agents.insert(id, tx) {
-            let (_, msg) = FooBar::new(ServerRequest::Close(
+            let (_, msg) = BarFoo::<ServerRequest>::new(ServerRequest::Close(
                 "agent with same ID connected to server".to_string(),
             ));
 
@@ -112,24 +116,11 @@ async fn ws_handler(
     ws.on_upgrade(|socket| handle_socket(socket, state, id))
 }
 
-#[derive(Debug)]
-struct FooBar {
-    msg: ServerRequest,
-    os: oneshot::Sender<Vec<u8>>,
-}
-
-impl FooBar {
-    fn new(msg: ServerRequest) -> (oneshot::Receiver<AgentResponse>, Self) {
-        let (tx, rx) = oneshot::channel();
-        (rx, Self { msg, os: tx })
-    }
-}
-
 async fn handle_socket(socket: WebSocket, state: State, id: AgentID) {
     info!("connecting agent: {}", &id);
 
     let (server_tx, mut server_rx) = {
-        let (server_tx, server_rx) = mpsc::unbounded_channel::<FooBar>();
+        let (server_tx, server_rx) = mpsc::unbounded_channel::<BarFoo<ServerRequest>>();
         (server_tx, UnboundedReceiverStream::new(server_rx))
     };
 
@@ -176,8 +167,8 @@ async fn handle_socket(socket: WebSocket, state: State, id: AgentID) {
                 };
 
                 let id = uuid::Uuid::new_v4().simple().to_string();
-                oneshots.insert(id.clone(), msg.os);
-                let res = ServerMessage::Request {id, message: msg.msg};
+                oneshots.insert(id.clone(), msg.sender);
+                let res = ServerMessage::Request {id, message: msg.request};
                 socket_tx.send(res.into_message()).await.unwrap();
             },
         }

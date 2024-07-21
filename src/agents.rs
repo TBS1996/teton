@@ -2,6 +2,7 @@ use crate::common;
 use common::AgentID;
 use common::AgentMessage;
 use common::AgentRequest;
+use common::BarFoo;
 use common::ServerMessage;
 use common::ServerResponse;
 use common::{PatientStatus, ServerRequest};
@@ -33,12 +34,12 @@ async fn sleep(secs: u64) {
     tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
 }
 
-struct FooBar {
+struct xBarFoo<AgentRequest> {
     request: AgentRequest,
     sender: oneshot::Sender<ServerResponse>,
 }
 
-impl FooBar {
+impl xBarFoo<AgentRequest> {
     fn new(request: AgentRequest, sender: oneshot::Sender<ServerResponse>) -> Self {
         Self { request, sender }
     }
@@ -58,11 +59,11 @@ fn agent_counter(sender: LolSender) {
 
 #[derive(Clone)]
 struct LolSender {
-    tx: UnboundedSender<FooBar>,
+    tx: UnboundedSender<BarFoo<AgentRequest>>,
 }
 
 impl LolSender {
-    fn new() -> (Self, UnboundedReceiverStream<FooBar>) {
+    fn new() -> (Self, UnboundedReceiverStream<BarFoo<AgentRequest>>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let rx = UnboundedReceiverStream::new(rx);
         let s = Self { tx };
@@ -72,9 +73,13 @@ impl LolSender {
 
     async fn send<T: for<'de> Deserialize<'de>>(&self, req: AgentRequest) -> Result<T, String> {
         let (tx, rx) = oneshot::channel();
-        let inside = FooBar::new(req, tx);
+
+        let inside = BarFoo::<AgentRequest>::new(req, tx);
+
         self.tx.send(inside).map_err(|e| e.to_string())?;
+
         let res = rx.await.map_err(|e| e.to_string())?;
+
         serde_json::from_slice(&res).map_err(|e| e.to_string())
     }
 }
