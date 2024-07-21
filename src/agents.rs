@@ -3,7 +3,7 @@ use common::AgentMessage;
 use common::AgentRequest;
 use common::ServerMessage;
 use common::ServerResponse;
-use common::{AgentResponse, PatientStatus, ServerRequest};
+use common::{PatientStatus, ServerRequest};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
@@ -13,7 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::connect_async;
 
-fn handle_server_request(content: ServerRequest) -> AgentResponse {
+fn handle_server_request(id: String, content: ServerRequest) -> AgentMessage {
     match content {
         ServerRequest::Close(msg) => {
             eprintln!("connection closed: {}", msg);
@@ -22,7 +22,7 @@ fn handle_server_request(content: ServerRequest) -> AgentResponse {
 
         ServerRequest::GetStatus => {
             let status = get_status();
-            AgentResponse::Status(status)
+            AgentMessage::new_response(id, status)
         }
     }
 }
@@ -83,12 +83,11 @@ fn agent_getstatus(sender: LolSender, id: String) {
         loop {
             sleep(5).await;
             let res = sender.send(AgentRequest::AgentStatus(id.clone())).await;
+            let status: Option<PatientStatus> = serde_json::from_slice(&res).unwrap();
 
-            if let ServerResponse::Status(status) = res {
-                match status {
-                    Some(status) => println!("{}-status: {:?}", &id, &status),
-                    None => println!("no agent connected with following id: {}", &id),
-                }
+            match status {
+                Some(status) => println!("{}-status: {:?}", &id, &status),
+                None => println!("no agent connected with following id: {}", &id),
             }
         }
     });
@@ -123,16 +122,13 @@ pub async fn run(id: String, observe: Vec<String>) {
             Some(message) = socket_rx.next() => {
                 match ServerMessage::from_message(message.unwrap()) {
                     ServerMessage::Request{id, message} => {
-                        let response = AgentMessage::Response {
-                            message: handle_server_request(message),
-                            id,
-                        };
+                        let response = handle_server_request(id, message);
                         socket_tx.send(response.into_message()).await.unwrap();
 
                     },
-                    ServerMessage::Response{ id, message } => {
+                    ServerMessage::Response{ id, data } => {
                         let os = oneshots.remove(&id).unwrap();
-                        os.send(message).unwrap();
+                        os.send(data).unwrap();
                     },
                 }
             },

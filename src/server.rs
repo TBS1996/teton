@@ -10,9 +10,8 @@ use axum::{
 };
 use common::AgentRequest;
 use common::PatientStatus;
-use common::ServerResponse;
+use common::ServerRequest;
 use common::{AgentMessage, ServerMessage};
-use common::{AgentResponse, ServerRequest};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use hyper::Server;
@@ -27,11 +26,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, trace, warn};
 
 type AgentID = String;
-
-#[derive(Debug, Serialize, Deserialize)]
-enum StateMessage {
-    GetQty,
-}
+type AgentResponse = Vec<u8>;
 
 struct Inner {
     agents: HashMap<String, UnboundedSender<FooBar>>,
@@ -55,11 +50,7 @@ impl State {
 
     async fn get_status(&self, id: String) -> Option<PatientStatus> {
         let res = self.send_message(id, ServerRequest::GetStatus).await?;
-        if let AgentResponse::Status(status) = res {
-            return Some(status);
-        }
-
-        panic!();
+        serde_json::from_slice(&res).ok()
     }
 
     async fn send_message(&self, id: String, content: ServerRequest) -> Option<AgentResponse> {
@@ -120,7 +111,7 @@ async fn ws_handler(
 #[derive(Debug)]
 struct FooBar {
     msg: ServerRequest,
-    os: oneshot::Sender<AgentResponse>,
+    os: oneshot::Sender<Vec<u8>>,
 }
 
 impl FooBar {
@@ -150,21 +141,21 @@ async fn handle_socket(socket: WebSocket, state: State, id: String) {
             res = socket_rx.next() => {
                 if let Some(Ok(msg)) = res {
                     match AgentMessage::from_message(msg) {
-                        AgentMessage::Response{id, message} => {
+                        AgentMessage::Response{id, data} => {
                             let os = oneshots.remove(&id).unwrap();
-                            os.send(message).unwrap();
+                            os.send(data).unwrap();
                         },
                         AgentMessage::Request{id, message} => {
                             match message {
                                 AgentRequest::AgentStatus(agent_id) => {
                                     let status = state.get_status(agent_id).await;
-                                    let msg = ServerMessage::Response { id, message: ServerResponse::Status(status) };
+                                    let msg = ServerMessage::new_response(id, status);
                                     socket_tx.send(msg.into_message()).await.unwrap();
 
                                 }
                                 AgentRequest::GetQty => {
                                     let qty = state.qty().await;
-                                    let msg = ServerMessage::Response { id, message: ServerResponse::Qty(qty) };
+                                    let msg = ServerMessage::new_response(id, qty);
                                     socket_tx.send(msg.into_message()).await.unwrap();
                                 },
                             }
