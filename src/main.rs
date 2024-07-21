@@ -1,6 +1,8 @@
 use clap::Parser;
 
 #[cfg(not(feature = "server"))]
+use agents::Agent;
+#[cfg(not(feature = "server"))]
 use futures::future::join_all;
 
 mod common;
@@ -40,7 +42,7 @@ async fn main() {
 
     let mut agent_futures = vec![];
     for agent in args.agents {
-        agent_futures.push(agents::run(agent, args.observe.clone()));
+        agent_futures.push(Agent::start(agent, args.observe.clone()));
     }
 
     join_all(agent_futures).await;

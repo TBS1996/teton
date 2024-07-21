@@ -76,6 +76,7 @@ impl State {
         };
     }
 
+    /// Sends a request to the given agent and returns its response.
     async fn send_message<ResponseType: for<'de> Deserialize<'de>>(
         &self,
         id: AgentID,
@@ -91,10 +92,7 @@ impl State {
             .oneshots
             .insert(request_id.clone(), sender);
 
-        let req = ServerMessage::Request {
-            id: request_id,
-            message: content,
-        };
+        let req = ServerMessage::new_request(request_id, content);
 
         self.0.lock().await.agents.get(&id)?.send(req).ok()?;
 
@@ -149,12 +147,12 @@ async fn ws_handler(
     ws.on_upgrade(|socket| handle_socket(socket, state, id))
 }
 
-async fn handle_socket(socket: WebSocket, state: State, id: AgentID) {
-    info!("connecting agent: {}", &id);
+async fn handle_socket(socket: WebSocket, state: State, agent_id: AgentID) {
+    info!("connecting agent: {}", &agent_id);
 
     let mut server_rx = {
         let (server_tx, server_rx) = mpsc::unbounded_channel::<ServerMessage>();
-        state.insert_agent(id.clone(), server_tx).await;
+        state.insert_agent(agent_id.clone(), server_tx).await;
         UnboundedReceiverStream::new(server_rx)
     };
 
@@ -169,14 +167,18 @@ async fn handle_socket(socket: WebSocket, state: State, id: AgentID) {
                     AgentMessage::Response{id, data} => state.handle_response(id, data).await,
                     AgentMessage::Request{id, message} => {
                         let msg = state.handle_request(id, message).await;
-                        socket_tx.send(msg.into_message()).await.unwrap();
+                        if let Err(e) = socket_tx.send(msg.into_message()).await {
+                            tracing::error!("failed to send message to agent: {}. message: {:?}, err: {}", &agent_id, &msg, e);
+                        }
                     },
                 };
             },
 
             // Messages received from [`State`]
             Some(req) = server_rx.next() => {
-                socket_tx.send(req.into_message()).await.unwrap();
+                if let Err(e) = socket_tx.send(req.into_message()).await  {
+                    tracing::error!("failed to send message to agent: {}. message: {:?}, err: {}", &agent_id, &req, e);
+                }
             },
         }
     }

@@ -73,7 +73,12 @@ impl ServerMessage {
 
         Self::Response { id, data }
     }
-    pub fn into_message(self) -> AxumMessage {
+
+    pub fn new_request(id: String, message: ServerRequest) -> Self {
+        Self::Request { id, message }
+    }
+
+    pub fn into_message(&self) -> AxumMessage {
         let mut writer: Vec<u8> = vec![];
         serde_json::to_writer(&mut writer, &self).unwrap();
         AxumMessage::Binary(writer)
