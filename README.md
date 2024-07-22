@@ -7,7 +7,7 @@ This is an assignment for creating a fleet management system, where we have one 
 
 ## System design
 
-We use an axum web-server for the api-server. The agents connect using websockets. A custom request-response architecture has been created, since websockets are bidirectional by nature. 
+We use an axum web-server for the api-server. The agents connect using websockets. A custom request-response architecture has been created, since websockets are async by nature. 
 
 My design allows for agents to be able to proactively send messages to the server and receive responses, instead of just receiving commands from the server. Agents can also send messages to other agents via the server.
 
@@ -21,11 +21,11 @@ The agent should now be connected to the server.
 foo_agent will regularly ask the server how many agents are connected, to prove that agents can also request data from the server.
 
 
-get patient status by opening a new terminal and enter: "curl localhost:3000/status/foo_agent"
+get patient status by opening a new terminal and enter: `curl localhost:3000/status/foo_agent`
 
-To see that one agent can communicate with another, open a new terminal and enter: "cargo run -- bar_agent --observe foo_agent".
-All arguments after --observe will be other agents that bar_agent will check the status of.
+To see that one agent can communicate with another, open a new terminal and enter: `cargo run -- bar_agent --observe foo_agent`.
+All arguments after `--observe` will be other agents that bar_agent will check the status of.
 
-also try: "curl localhost:3000/check/foo_agent". 
+also try: `curl localhost:3000/check/foo_agent`. 
 
-to kill an agent: "curl localhost:3000/kill/:agent_id". 
+to kill an agent: `curl localhost:3000/kill/:agent_id`. 
