@@ -18,7 +18,7 @@ My design allows for agents to be able to proactively send messages to the serve
 2. Open another terminal, do `cargo run -- foo_agent`
 
 The agent should now be connected to the server.
-foo_agent will regularly ask the server how many agents are connected, to prove that agents can also request data from the server.
+`foo_agent` will regularly ask the server how many agents are connected, to prove that agents can also request data from the server.
 
 
 get patient status by opening a new terminal and enter: `curl localhost:3000/status/foo_agent`
