@@ -2,22 +2,23 @@ use serde::{Deserialize, Serialize};
 
 pub const ADDR: &str = "0.0.0.0:3000";
 
+pub type ServerResponse = Vec<u8>;
+pub type AgentResponse = Vec<u8>;
+pub type AgentID = String;
+pub type RequestID = String;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum PatientStatus {
     Sitting,
     Lying,
 }
 
-pub type ServerResponse = Vec<u8>;
-pub type AgentResponse = Vec<u8>;
-pub type AgentID = String;
-pub type RequestID = String;
-
 // A message from an agent
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum AgentMessage {
     Request { id: String, message: AgentRequest },
     Response { id: String, data: AgentResponse },
+    Closing,
 }
 
 #[cfg(feature = "server")]
@@ -29,11 +30,11 @@ use tokio_tungstenite::tungstenite::protocol::Message as TungsteniteMessage;
 #[cfg(feature = "server")]
 impl AgentMessage {
     pub fn from_message(message: AxumMessage) -> Self {
-        if let AxumMessage::Binary(b) = message {
-            return serde_json::from_slice(&b).unwrap();
-        };
-
-        panic!();
+        match message {
+            AxumMessage::Binary(b) => serde_json::from_slice(&b).unwrap(),
+            AxumMessage::Close(_) => Self::Closing,
+            other => panic!("unexpected message: {:?}", other),
+        }
     }
 }
 
@@ -92,11 +93,13 @@ impl ServerMessage {
 #[cfg(not(feature = "server"))]
 impl ServerMessage {
     pub fn from_message(message: TungsteniteMessage) -> Self {
-        if let TungsteniteMessage::Binary(b) = message {
-            return serde_json::from_slice(&b).unwrap();
-        };
-
-        panic!();
+        match message {
+            TungsteniteMessage::Binary(b) => serde_json::from_slice(&b).unwrap(),
+            TungsteniteMessage::Close(_) => {
+                ServerMessage::Terminate("connection closed".to_string())
+            }
+            other => panic!("unexpected message: {:?}", other),
+        }
     }
 }
 
