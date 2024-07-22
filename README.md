@@ -24,7 +24,7 @@ foo_agent will regularly ask the server how many agents are connected, to prove 
 get patient status by opening a new terminal and enter: `curl localhost:3000/status/foo_agent`
 
 To see that one agent can communicate with another, open a new terminal and enter: `cargo run -- bar_agent --observe foo_agent`.
-All arguments after `--observe` will be other agents that bar_agent will check the status of.
+All arguments after `--observe` will be other agents that `bar_agent` will check the status of.
 
 also try: `curl localhost:3000/check/foo_agent`. 
 
