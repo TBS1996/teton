@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse, routing::get, Router,
 };
 use common::AgentID;
+use common::AlarmTriggerResult;
 use common::PatientStatus;
 use futures_util::StreamExt;
 use hyper::Server;
@@ -45,8 +46,22 @@ impl State {
         })));
 
         s.handle_statemessage(rx);
+        s.handle_sigint();
 
         s
+    }
+
+    fn handle_sigint(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.unwrap();
+            let agents = &state.0.lock().await.agents;
+            for (_, agent) in agents {
+                agent.kill("server received siginit".into());
+            }
+
+            std::process::exit(0);
+        });
     }
 
     fn handle_statemessage(&self, mut rx: UnboundedReceiverStream<StateMessage>) {
@@ -79,9 +94,7 @@ impl State {
 
     async fn insert_agent(&self, id: AgentID, agent: Agent) {
         if let Some(agent) = self.0.lock().await.agents.insert(id, agent) {
-            agent
-                .kill("agent with same ID connected to server".to_string())
-                .await;
+            agent.kill("agent with same ID connected to server".to_string());
         }
     }
 
@@ -103,12 +116,41 @@ pub async fn run_server() {
         .route("/ws", get(ws_handler))
         .route("/status/:agent_id", get(status_handler))
         .route("/kill/:agent_id", get(kill_handler))
+        .route("/check/:agent_id", get(check_handler))
         .layer(Extension(state));
 
     Server::bind(&common::ADDR.parse().unwrap())
         .serve(app.into_make_service())
         .await
         .unwrap();
+}
+
+async fn check_handler(
+    Path(agent_id): Path<String>,
+    Extension(state): Extension<State>,
+) -> impl IntoResponse {
+    if let Some(agent) = state.get_agent(&agent_id).await {
+        match agent.status().await {
+            Some(PatientStatus::Lying) => "no worries, patient is lying".to_string(),
+            Some(PatientStatus::Sitting) => {
+                let alarm_res = agent.trigger_alarm().await;
+                match alarm_res {
+                    AlarmTriggerResult::Success => {
+                        "patient was sitting, and alarm was triggered".to_string()
+                    }
+                    AlarmTriggerResult::Failure(reason) => {
+                        format!(
+                            "patient was sitting, but alarm failed to trigger: {}",
+                            reason
+                        )
+                    }
+                }
+            }
+            None => "failed to retrieve patient status".to_string(),
+        }
+    } else {
+        "agent not found".to_string()
+    }
 }
 
 async fn kill_handler(
@@ -118,7 +160,7 @@ async fn kill_handler(
     info!("{}: receive kill command for: ", &agent_id);
 
     if let Some(agent) = state.get_agent(&agent_id).await {
-        agent.kill("killed through api command".to_string()).await;
+        agent.kill("killed through api command".to_string());
         "agent killed"
     } else {
         "agent not found"

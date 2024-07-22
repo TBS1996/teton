@@ -2,6 +2,7 @@ use crate::common;
 use common::AgentID;
 use common::AgentMessage;
 use common::AgentRequest;
+use common::AlarmTriggerResult;
 use common::RequestID;
 use common::ServerMessage;
 use common::ServerResponse;
@@ -17,11 +18,27 @@ use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::connect_async;
 
+fn trigger_alarm() -> AlarmTriggerResult {
+    use AlarmTriggerResult as RES;
+    match current_unix() % 10 {
+        0 => RES::Failure("battery low".to_string()),
+        1 => RES::Failure("communication failure".to_string()),
+        2 => RES::Failure("alarm disabled".to_string()),
+        3 => RES::Failure("alarm turned off".to_string()),
+        _ => RES::Success,
+    }
+}
+
 fn handle_server_request(id: RequestID, content: ServerRequest) -> AgentMessage {
     match content {
         ServerRequest::GetStatus => {
             let status = get_status();
             AgentMessage::new_response(id, status)
+        }
+
+        ServerRequest::TriggerAlarm => {
+            let res = trigger_alarm();
+            AgentMessage::new_response(id, res)
         }
     }
 }
@@ -93,10 +110,11 @@ impl Agent {
         tokio::spawn(async move {
             loop {
                 sleep(5).await;
-                let status: Option<PatientStatus> = sender
-                    .send(AgentRequest::AgentStatus(id.clone()))
-                    .await
-                    .unwrap();
+                let status: Option<PatientStatus> =
+                    match sender.send(AgentRequest::AgentStatus(id.clone())).await {
+                        Ok(status) => status,
+                        Err(_) => return,
+                    };
 
                 match status {
                     Some(status) => tracing::info!("{}-status: {:?}", &id, &status),
@@ -112,7 +130,10 @@ impl Agent {
         tokio::spawn(async move {
             loop {
                 sleep(5).await;
-                let res: usize = sender.send(AgentRequest::GetQty).await.unwrap();
+                let res: usize = match sender.send(AgentRequest::GetQty).await {
+                    Ok(res) => res,
+                    Err(_) => return,
+                };
                 tracing::info!("total agents: {}", res);
             }
         });
@@ -129,6 +150,11 @@ impl Agent {
 
         loop {
             tokio::select! {
+                Ok(()) = tokio::signal::ctrl_c() => {
+                    let _ = socket_tx.send(AgentMessage::Closing("Received sigint".into()).into_message()).await;
+                    return;
+                },
+
                 Some(msg) = rx.next() => {
                     if let Err(e) = socket_tx.send(msg.into_message()).await {
                         tracing::error!("failed to send message to server: {}", e);
@@ -159,5 +185,17 @@ impl Agent {
 }
 
 fn get_status() -> PatientStatus {
-    PatientStatus::Lying
+    if current_unix() % 2 == 0 {
+        PatientStatus::Lying
+    } else {
+        PatientStatus::Sitting
+    }
+}
+
+fn current_unix() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }

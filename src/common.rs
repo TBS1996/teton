@@ -18,7 +18,7 @@ pub enum PatientStatus {
 pub enum AgentMessage {
     Request { id: String, message: AgentRequest },
     Response { id: String, data: AgentResponse },
-    Closing,
+    Closing(String),
 }
 
 #[cfg(feature = "server")]
@@ -32,7 +32,7 @@ impl AgentMessage {
     pub fn from_message(message: AxumMessage) -> Self {
         match message {
             AxumMessage::Binary(b) => serde_json::from_slice(&b).unwrap(),
-            AxumMessage::Close(_) => Self::Closing,
+            AxumMessage::Close(_) => Self::Closing("connection closed unexpectedly".into()),
             other => panic!("unexpected message: {:?}", other),
         }
     }
@@ -65,6 +65,13 @@ pub enum ServerMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerRequest {
     GetStatus,
+    TriggerAlarm,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AlarmTriggerResult {
+    Success,
+    Failure(String),
 }
 
 #[cfg(feature = "server")]

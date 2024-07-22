@@ -5,6 +5,7 @@ use axum::extract::ws::WebSocket;
 use common::AgentID;
 use common::AgentRequest;
 use common::AgentResponse;
+use common::AlarmTriggerResult;
 use common::RequestID;
 use common::ServerRequest;
 use common::{AgentMessage, ServerMessage};
@@ -40,8 +41,14 @@ impl Agent {
         (rx, agent)
     }
 
-    pub async fn kill(&self, reason: String) {
+    pub fn kill(&self, reason: String) {
         self.tx.send(ServerMessage::Terminate(reason)).unwrap();
+    }
+
+    pub async fn trigger_alarm(&self) -> AlarmTriggerResult {
+        self.send_message(ServerRequest::TriggerAlarm)
+            .await
+            .unwrap()
     }
 
     pub async fn status(&self) -> Option<PatientStatus> {
@@ -49,7 +56,7 @@ impl Agent {
     }
 
     /// Sends a request to the given agent and returns its response.
-    pub async fn send_message<ResponseType: for<'de> Deserialize<'de>>(
+    async fn send_message<ResponseType: for<'de> Deserialize<'de>>(
         &self,
         content: ServerRequest,
     ) -> Option<ResponseType> {
@@ -123,7 +130,8 @@ pub async fn handle_socket(
             // Messages received from the agent
             Some(Ok(msg)) = socket_rx.next() => {
                 match AgentMessage::from_message(msg) {
-                    AgentMessage::Closing => {
+                    AgentMessage::Closing(reason) => {
+                        tracing::warn!("closing agent: {}. {}", &agent_id, reason);
                         state_tx.send(StateMessage::Purge(agent_id.clone())).unwrap();
                     },
                     AgentMessage::Response{id, data} => agent.handle_response(id, data).await,
