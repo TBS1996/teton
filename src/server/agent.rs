@@ -133,6 +133,7 @@ pub async fn handle_socket(
                     AgentMessage::Closing(reason) => {
                         tracing::warn!("closing agent: {}. {}", &agent_id, reason);
                         state_tx.send(StateMessage::Purge(agent_id.clone())).unwrap();
+                        return;
                     },
                     AgentMessage::Response{id, data} => agent.handle_response(id, data).await,
                     AgentMessage::Request{id, message} => {

@@ -129,27 +129,27 @@ async fn check_handler(
     Path(agent_id): Path<String>,
     Extension(state): Extension<State>,
 ) -> impl IntoResponse {
-    if let Some(agent) = state.get_agent(&agent_id).await {
-        match agent.status().await {
-            Some(PatientStatus::Lying) => "no worries, patient is lying".to_string(),
-            Some(PatientStatus::Sitting) => {
-                let alarm_res = agent.trigger_alarm().await;
-                match alarm_res {
-                    AlarmTriggerResult::Success => {
-                        "patient was sitting, and alarm was triggered".to_string()
-                    }
-                    AlarmTriggerResult::Failure(reason) => {
-                        format!(
-                            "patient was sitting, but alarm failed to trigger: {}",
-                            reason
-                        )
-                    }
+    let Some(agent) = state.get_agent(&agent_id).await else {
+        return "agent not found".to_string();
+    };
+
+    match agent.status().await {
+        Some(PatientStatus::Lying) => "no worries, patient is lying".to_string(),
+        Some(PatientStatus::Sitting) => {
+            let alarm_res = agent.trigger_alarm().await;
+            match alarm_res {
+                AlarmTriggerResult::Success => {
+                    "patient was sitting, and alarm was triggered".to_string()
+                }
+                AlarmTriggerResult::Failure(reason) => {
+                    format!(
+                        "patient was sitting, but alarm failed to trigger: {}",
+                        reason
+                    )
                 }
             }
-            None => "failed to retrieve patient status".to_string(),
         }
-    } else {
-        "agent not found".to_string()
+        None => "failed to retrieve patient status".to_string(),
     }
 }
 

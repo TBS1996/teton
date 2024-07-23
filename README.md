@@ -29,3 +29,24 @@ All arguments after `--observe` will be other agents that `bar_agent` will check
 also try: `curl localhost:3000/check/foo_agent`. 
 
 to kill an agent: `curl localhost:3000/kill/:agent_id`. 
+
+
+
+```mermaid
+sequenceDiagram
+    participant remote_agent1 as Agent 1 (Remote)
+    participant agent1 as Agent 1 (Server)
+    participant server as Server
+    participant agent2 as Agent 2 (Server)
+    participant remote_agent2 as Agent 2 (Remote)
+
+    remote_agent1->>agent1: AgentStatus(agent2id)
+    agent1->>server: getStatus(agent2id)
+    server->>agent2: GetStatus
+    agent2->>remote_agent2: GetStatus
+    remote_agent2-->>agent2: Status
+    agent2-->>server: Status
+    server-->>agent1: StatusResponse
+    agent1-->>remote_agent1: StatusResponse
+
+```
